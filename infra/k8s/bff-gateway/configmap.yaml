@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bff-gateway
+data:
+  # TODO: gateway routes and upstream service URLs
+  PLACEHOLDER: "true"

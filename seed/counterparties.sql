@@ -1,0 +1,4 @@
+-- PLACEHOLDER - seed data for the counterparties reference table (owner: trade-capture-service).
+-- Intent: 8 counterparties - EDP, Iberdrola, Galp, Endesa, RWE, Engie, Vattenfall, Octopus Energy.
+-- Columns (see docs/architecture.md): code (PK), name, country, active.
+-- TODO: add INSERT statements once the Flyway migration creating the table exists.

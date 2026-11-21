@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trade-capture-service
+  labels:
+    app: trade-capture-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trade-capture-service
+  template:
+    metadata:
+      labels:
+        app: trade-capture-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: "8081"
+    spec:
+      containers:
+        - name: trade-capture-service
+          image: tradeflow/trade-capture-service:local   # TODO: ECR URL + tag bumped by the GitOps pipeline
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: trade-capture-service
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: 500m, memory: 1Gi}

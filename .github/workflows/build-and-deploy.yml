@@ -1,0 +1,97 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write   # OIDC: AWS role assumption + cosign keyless signing
+
+env:
+  # Required repo secrets: AWS_ROLE_ARN, ECR_REGISTRY (e.g. 123456789012.dkr.ecr.eu-west-1.amazonaws.com),
+  # SONAR_TOKEN, SONAR_HOST_URL, NVD_API_KEY, GITOPS_TOKEN
+  AWS_REGION: eu-west-1
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Build and test (unit + Testcontainers integration tests)
+        run: mvn -B verify -Pquality
+      - name: SonarQube scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: mvn -B sonar:sonar -Dsonar.projectKey=tradeflow-etrm
+      - name: OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: mvn -B org.owasp:dependency-check-maven:check
+
+  build-image:
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [trade-capture-service, market-data-service, valuation-service, settlement-service, reporting-service, bff-gateway]
+    env:
+      IMAGE: ${{ secrets.ECR_REGISTRY }}/tf-${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build image (loaded locally for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+      - name: Trivy scan (critical CVEs block the push)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Push image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image (keyless, OIDC)
+        run: cosign sign --yes ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+
+  deploy:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      # TODO: create the GitOps repository and adjust the name below
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/tradeflow-gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+      - name: Bump image tag (ArgoCD auto-syncs)
+        run: |
+          yq -i '.image.tag = "${{ github.sha }}"' apps/*/values.yaml
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -am "deploy: ${{ github.sha }}"
+          git push

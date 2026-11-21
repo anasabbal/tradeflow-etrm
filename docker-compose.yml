@@ -1,0 +1,258 @@
+# TradeFlow ETRM - local development stack
+# Start everything:   docker compose up --build -d
+# Infra only:         docker compose up -d postgres redpanda redis prometheus grafana
+#
+# Kafka addresses:  inside the network -> redpanda:9092
+#                   from your host     -> localhost:19092
+name: tradeflow
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: tradeflow
+      POSTGRES_USER: tradeflow
+      POSTGRES_PASSWORD: tradeflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init-schemas.sql:/docker-entrypoint-initdb.d/01-init-schemas.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradeflow -d tradeflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [tradeflow]
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --schema-registry-addr=0.0.0.0:8081
+    ports:
+      - "19092:19092"   # Kafka API for host-side clients
+      - "18081:8081"    # Schema Registry (host port moved off 8081)
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [tradeflow]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [tradeflow]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [tradeflow]
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [tradeflow]
+
+  trade-capture-service:
+    build:
+      context: .
+      dockerfile: trade-capture-service/Dockerfile
+    image: tradeflow/trade-capture-service:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeflow?currentSchema=trades
+      SPRING_DATASOURCE_USERNAME: tradeflow
+      SPRING_DATASOURCE_PASSWORD: tradeflow
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8081/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+  market-data-service:
+    build:
+      context: .
+      dockerfile: market-data-service/Dockerfile
+    image: tradeflow/market-data-service:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeflow?currentSchema=prices
+      SPRING_DATASOURCE_USERNAME: tradeflow
+      SPRING_DATASOURCE_PASSWORD: tradeflow
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SPRING_DATA_REDIS_HOST: redis
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8082/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+  valuation-service:
+    build:
+      context: .
+      dockerfile: valuation-service/Dockerfile
+    image: tradeflow/valuation-service:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeflow?currentSchema=valuations
+      SPRING_DATASOURCE_USERNAME: tradeflow
+      SPRING_DATASOURCE_PASSWORD: tradeflow
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SPRING_DATA_REDIS_HOST: redis
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8083/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+  settlement-service:
+    build:
+      context: .
+      dockerfile: settlement-service/Dockerfile
+    image: tradeflow/settlement-service:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeflow?currentSchema=settlements
+      SPRING_DATASOURCE_USERNAME: tradeflow
+      SPRING_DATASOURCE_PASSWORD: tradeflow
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    ports:
+      - "8084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8084/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+  reporting-service:
+    build:
+      context: .
+      dockerfile: reporting-service/Dockerfile
+    image: tradeflow/reporting-service:local
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tradeflow?currentSchema=public
+      SPRING_DATASOURCE_USERNAME: tradeflow
+      SPRING_DATASOURCE_PASSWORD: tradeflow
+    ports:
+      - "8085:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8085/actuator/health | grep -Eq '^(200|401)$'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+  bff-gateway:
+    build:
+      context: .
+      dockerfile: bff-gateway/Dockerfile
+    image: tradeflow/bff-gateway:local
+    ports:
+      - "8080:8080"
+    depends_on:
+      trade-capture-service:
+        condition: service_healthy
+      market-data-service:
+        condition: service_healthy
+      valuation-service:
+        condition: service_healthy
+      settlement-service:
+        condition: service_healthy
+      reporting-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health | grep -Eq '^(200|401)$'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks: [tradeflow]
+
+volumes:
+  pgdata:
+  redpanda-data:
+  grafana-data:
+
+networks:
+  tradeflow:
+    driver: bridge
+

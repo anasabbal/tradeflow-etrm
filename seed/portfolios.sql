@@ -1,0 +1,4 @@
+-- PLACEHOLDER - seed data for the portfolios reference table (owner: trade-capture-service).
+-- Intent: 5 portfolios - PT-PWR-2026, PT-GAS-2026, EU-PWR-2026, EU-GAS-2026, CO2-2026.
+-- Columns (see docs/architecture.md): code (PK), name, desk, currency.
+-- TODO: add INSERT statements once the Flyway migration creating the table exists.

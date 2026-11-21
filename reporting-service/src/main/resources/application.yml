@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: reporting-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/tradeflow?currentSchema=public}
+    username: ${SPRING_DATASOURCE_USERNAME:tradeflow}
+    password: ${SPRING_DATASOURCE_PASSWORD:tradeflow}
+
+server:
+  port: 8085
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

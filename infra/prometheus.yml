@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: trade-capture-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["trade-capture-service:8081"]
+  - job_name: market-data-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["market-data-service:8082"]
+  - job_name: valuation-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["valuation-service:8083"]
+  - job_name: settlement-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["settlement-service:8084"]
+  - job_name: reporting-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["reporting-service:8085"]
+  - job_name: bff-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["bff-gateway:8080"]
+
+# NOTE: reporting-service and bff-gateway return 401 on /actuator/prometheus until a
+# SecurityConfig permits it (or a scrape credential is configured here).

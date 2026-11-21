@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valuation-service
+  labels:
+    app: valuation-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valuation-service
+  template:
+    metadata:
+      labels:
+        app: valuation-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: "8083"
+    spec:
+      containers:
+        - name: valuation-service
+          image: tradeflow/valuation-service:local   # TODO: ECR URL + tag bumped by the GitOps pipeline
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: valuation-service
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: 500m, memory: 1Gi}
